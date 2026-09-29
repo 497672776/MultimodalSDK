@@ -6,3 +6,4 @@ output/
 *.egg-info/
 .pytest_cache/
 .venv/
+.playwright-cli/
