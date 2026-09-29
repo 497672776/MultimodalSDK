@@ -16,6 +16,7 @@
 # See the Mulan PSL v2 for more details.
 # -------------------------------------------------------------------------
 import ctypes
+import importlib
 from pathlib import Path
 
 
@@ -55,5 +56,31 @@ def _preload_shared_libraries(base):
     ctypes.CDLL(str(libcore.resolve()), mode=ctypes.RTLD_GLOBAL)
 
 
+def _load_native_backend(base):
+    """Load the native AccSDK backend when ``libcore.so`` is available.
+
+    Returns ``None`` on platforms where the native acceleration layer is not
+    deployed (for example RISC-V boards), so that callers fall back to the
+    pure-Python CPU backend.
+    """
+    libcore = base / "lib" / "libcore.so"
+    if not libcore.is_file():
+        return None
+
+    _preload_shared_libraries(base)
+    for module_name in (f"{__name__}.acc", f"{__name__}._acc"):
+        try:
+            return importlib.import_module(module_name)
+        except ImportError:
+            continue
+    raise ImportError(
+        f"libcore.so was found under {base / 'lib'} but no importable acc backend was found. "
+        "Please reinstall the mm wheel package."
+    )
+
+
 _impl_dir = Path(__file__).resolve().parent
-_preload_shared_libraries(_impl_dir)
+
+acc = _load_native_backend(_impl_dir)
+if acc is None:
+    from . import cpu_backend as acc
