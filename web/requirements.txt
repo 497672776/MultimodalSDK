@@ -1,0 +1,9 @@
+# Binary wheels for these must come from the SpacemiT registry on RISC-V:
+#   -i https://pypi.tuna.tsinghua.edu.cn/simple \
+#   --extra-index-url https://git.spacemit.com/api/v4/projects/33/packages/pypi/simple
+torch==2.8.0+spacemit.omp.2   # RISC-V build; use any torch>=2.0 elsewhere
+numpy>=2.0
+pillow>=11.0
+fastapi>=0.110
+uvicorn>=0.30
+python-multipart>=0.0.9

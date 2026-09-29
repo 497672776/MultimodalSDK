@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MultimodalSDK · K3 演示</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%A7%A9%3C/text%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<header>
+  <div class="brand">
+    <h1>MultimodalSDK <span class="muted">on K3</span></h1>
+    <p class="sub">国产多模态预处理 SDK · 网页演示 · 模型侧走 llama.cpp</p>
+  </div>
+  <div id="status" class="status">
+    <span class="pill loading">正在读取运行环境…</span>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-panel="image">图像预处理</button>
+  <button class="tab" data-panel="video">视频抽帧</button>
+  <button class="tab" data-panel="audio">音频加载</button>
+  <button class="tab" data-panel="scc">SCC 压缩</button>
+  <button class="tab" data-panel="vlm">视觉问答</button>
+</nav>
+
+<main>
+  <!-- 图像预处理 -->
+  <section class="panel active" id="panel-image">
+    <div class="card">
+      <h2>图像解码 + Qwen2-VL 归一化</h2>
+      <p class="hint">mm.Image 解码 → mm.Tensor → <code>mm.core.processor.resize_and_normalize</code>（smart resize 到 28 的整数倍、/255、按 mean/std 归一化）。</p>
+      <div class="row">
+        <label class="drop" id="drop-image">
+          <input type="file" id="file-image" accept="image/*" />
+          <span>点击或拖拽图片到此处</span>
+        </label>
+        <div class="params">
+          <label>目标尺寸
+            <select id="image-target">
+              <option value="qwen">Qwen2-VL smart resize</option>
+              <option value="square">固定方形</option>
+            </select>
+          </label>
+          <label>方形边长 <input type="number" id="image-size" value="448" step="28" min="28" max="1344" /></label>
+          <button class="primary" id="run-image" disabled>开始预处理</button>
+        </div>
+      </div>
+      <div class="result" id="result-image"></div>
+    </div>
+  </section>
+
+  <!-- 视频抽帧 -->
+  <section class="panel" id="panel-video">
+    <div class="card">
+      <h2>视频解码 / 抽帧</h2>
+      <p class="hint"><code>mm.acc.video_decode</code>：可均匀抽帧（sample_num）或指定帧号（frame_indices，空格或逗号分隔）。</p>
+      <div class="row">
+        <label class="drop" id="drop-video">
+          <input type="file" id="file-video" accept="video/*" />
+          <span>点击或拖拽视频到此处</span>
+        </label>
+        <div class="params">
+          <label>抽帧数量 <input type="number" id="video-sample" value="8" min="1" max="64" /></label>
+          <label>指定帧号 <input type="text" id="video-indices" placeholder="如 0 10 20（留空则按数量抽帧）" /></label>
+          <button class="primary" id="run-video" disabled>开始抽帧</button>
+        </div>
+      </div>
+      <div class="result" id="result-video"></div>
+    </div>
+  </section>
+
+  <!-- 音频加载 -->
+  <section class="panel" id="panel-audio">
+    <div class="card">
+      <h2>音频加载</h2>
+      <p class="hint"><code>mm.load_audio(path, sr)</code>：仅支持 .wav，返回一维 float32 波形与采样率。</p>
+      <div class="row">
+        <label class="drop" id="drop-audio">
+          <input type="file" id="file-audio" accept=".wav,audio/wav" />
+          <span>点击或拖拽 wav 文件到此处</span>
+        </label>
+        <div class="params">
+          <label>重采样率 <input type="number" id="audio-sr" value="16000" min="1" step="1000" /></label>
+          <button class="primary" id="run-audio" disabled>加载音频</button>
+        </div>
+      </div>
+      <div class="result" id="result-audio"></div>
+    </div>
+  </section>
+
+  <!-- SCC -->
+  <section class="panel" id="panel-scc">
+    <div class="card">
+      <h2>SCC 视觉 token 压缩</h2>
+      <p class="hint"><code>mm.core.scc.scc_compress_to_target</code>：按目标 token 数做语义连通分量合并。CPU 后端没有视觉编码器，演示用每 28×28 patch 的颜色/纹理描述子代替真实特征。</p>
+      <div class="row">
+        <label class="drop" id="drop-scc">
+          <input type="file" id="file-scc" accept="image/*" />
+          <span>点击或拖拽图片到此处</span>
+        </label>
+        <div class="params">
+          <label>保留比例 <input type="number" id="scc-ratio" value="0.5" min="0.05" max="1" step="0.05" /></label>
+          <label>tau <input type="number" id="scc-tau" value="0.98" min="0" max="1" step="0.01" /></label>
+          <label>epsilon <input type="number" id="scc-eps" value="0.05" min="0" max="1" step="0.01" /></label>
+          <button class="primary" id="run-scc" disabled>执行压缩</button>
+        </div>
+      </div>
+      <div class="result" id="result-scc"></div>
+    </div>
+  </section>
+
+  <!-- VLM -->
+  <section class="panel" id="panel-vlm">
+    <div class="card">
+      <h2>视觉问答（llama-server）</h2>
+      <p class="hint">图片先经 mm 解码与缩放，再以 base64 发送给 K3 上的 <code>llama-server</code>（Qwen3-VL + mmproj）。</p>
+      <div class="row">
+        <label class="drop" id="drop-vlm">
+          <input type="file" id="file-vlm" accept="image/*" />
+          <span>点击或拖拽图片到此处</span>
+        </label>
+        <div class="params">
+          <label>最长边 <input type="number" id="vlm-maxside" value="768" min="112" max="2048" step="16" /></label>
+          <label>最大生成 token <input type="number" id="vlm-maxtokens" value="256" min="16" max="2048" step="16" /></label>
+          <label>temperature <input type="number" id="vlm-temp" value="0.2" min="0" max="2" step="0.1" /></label>
+        </div>
+      </div>
+      <textarea id="vlm-question" rows="3">请用中文描述这张图片的内容，并指出最值得注意的细节。</textarea>
+      <button class="primary" id="run-vlm" disabled>提问</button>
+      <div class="result" id="result-vlm"></div>
+    </div>
+  </section>
+</main>
+
+<footer class="muted">
+  部署位置：<code id="deploy-path">—</code>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
