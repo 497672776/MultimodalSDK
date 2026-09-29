@@ -16,6 +16,8 @@
 # See the Mulan PSL v2 for more details.
 # -------------------------------------------------------------------------
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from typing import List, Literal, Tuple, Optional
 from collections import defaultdict
@@ -23,14 +25,26 @@ import os
 import stat
 
 import numpy as np
-import torch
-import cv2
-from transformers import (
-    ChineseCLIPProcessor,
-    ChineseCLIPModel,
-    CLIPProcessor,
-    CLIPModel,
-)
+
+# CLIP based keyframe selection needs torch, OpenCV and transformers. They are
+# optional so that the rest of MultimodalSDK keeps working on platforms where
+# they are unavailable; instantiating a selector without them raises a clear
+# error instead of breaking `import mm`.
+try:
+    import cv2
+    import torch
+    from transformers import (
+        ChineseCLIPProcessor,
+        ChineseCLIPModel,
+        CLIPProcessor,
+        CLIPModel,
+    )
+    _FRAME_SELECTOR_IMPORT_ERROR = None
+except ImportError as _error:  # pragma: no cover - depends on the deployment platform
+    cv2 = None
+    torch = None
+    ChineseCLIPProcessor = ChineseCLIPModel = CLIPProcessor = CLIPModel = None
+    _FRAME_SELECTOR_IMPORT_ERROR = _error
 
 DECAY_STEP = 0.01
 INITIAL_STAGE_DIFF = 0.03
@@ -90,6 +104,11 @@ class BaseFrameSelector(ABC):
             "cn_clip": self._init_cn_clip_model,
         }
 
+        if _FRAME_SELECTOR_IMPORT_ERROR is not None:
+            raise RuntimeError(
+                "Frame selectors need torch, OpenCV and transformers, which failed to "
+                f"import: {_FRAME_SELECTOR_IMPORT_ERROR}"
+            )
         self._check_input_valid()
         self._init_model()
 
