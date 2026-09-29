@@ -1,0 +1,198 @@
+#!/bin/bash
+
+# -------------------------------------------------------------------------
+#  This file is part of the MultimodalSDK project.
+# Copyright (c) 2025 Huawei Technologies Co.,Ltd.
+#
+# MultimodalSDK is licensed under Mulan PSL v2.
+# You can use this software according to the terms and conditions of the Mulan PSL v2.
+# You may obtain a copy of Mulan PSL v2 at:
+#
+#           http://license.coscl.org.cn/MulanPSL2
+#
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND,
+# EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT,
+# MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
+# See the Mulan PSL v2 for more details.
+# -------------------------------------------------------------------------
+# Description: SDK build script.
+# Author: Multimodal SDK
+# Create: 2025
+# History: NA
+set -e
+
+SCRIPT_DIR=$(cd "$(dirname "$0")"; pwd)
+A_ROOT_DIR=$(cd "$SCRIPT_DIR/.."; pwd)
+
+B_REPO_DIR="${A_ROOT_DIR}/../AccSDK"
+B_BUILD_SCRIPT="${B_REPO_DIR}/build_script/build.sh"
+PACKAGE_DIR="${A_ROOT_DIR}/source/mm/acc/_impl"
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+VERSION="0.0.0.dev"
+PARSED_BUILD_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --version)
+            VERSION="$2"
+            shift 2
+            ;;
+        *)
+            PARSED_BUILD_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+pip3 install "pillow>=11.2.1"
+pip3 install torch-npu==2.10.0.post4
+pip3 install transformers==5.5.4
+pip3 install einops
+
+BUILD_ARGS=("${PARSED_BUILD_ARGS[@]}")
+echo "[INFO] Cleaning build, dist, egg-info..."
+rm -rf "${A_ROOT_DIR}/build" "${A_ROOT_DIR}/dist"
+rm -rf "${A_ROOT_DIR}"/source/*.egg-info
+
+echo "[INFO] Step 3: Copy and build whl..."
+
+# find acc.cpython*.so
+SO_SRC=$(find "${B_REPO_DIR}/output" -name "_acc.so" | head -n 1)
+if [ -z "$SO_SRC" ]; then
+    echo "[ERROR] File not found: _acc.so"
+    exit 1
+fi
+
+mkdir -p "${PACKAGE_DIR}"
+SO_DST="${PACKAGE_DIR}/$(basename "$SO_SRC")"
+cp -f "$SO_SRC" "$SO_DST"
+echo "[INFO] Copying .so to: ${SO_DST}"
+
+# find acc.py
+SO_SRC=$(find "${B_REPO_DIR}/output" -name "acc.py" | head -n 1)
+if [ -z "$SO_SRC" ]; then
+    echo "[ERROR] File not found: acc.py"
+    exit 1
+fi
+
+SO_DST="${PACKAGE_DIR}/$(basename "$SO_SRC")"
+cp -f "$SO_SRC" "$SO_DST"
+echo "[INFO] Copying acc.py to: ${SO_DST}"
+
+# copy native libs into package for wheel bundling
+IMPL_LIB_DIR="${PACKAGE_DIR}/lib"
+IMPL_OPENSOURCE_DIR="${PACKAGE_DIR}/opensource"
+rm -rf "${IMPL_LIB_DIR}" "${IMPL_OPENSOURCE_DIR}"
+mkdir -p "${IMPL_LIB_DIR}"
+
+if compgen -G "${B_REPO_DIR}/output/lib/libcore.so" > /dev/null; then
+  cp -Lf "${B_REPO_DIR}/output/lib/libcore.so" "${IMPL_LIB_DIR}/"
+  echo "[INFO] Copying libcore.so to: ${IMPL_LIB_DIR}/"
+else
+  echo "[ERROR] File not found: libcore.so"
+  exit 1
+fi
+
+for _lib_component in FFmpeg libjpeg-turbo soxr; do
+  _src_lib="${B_REPO_DIR}/output/opensource/${_lib_component}/lib"
+  if [ -d "${_src_lib}" ]; then
+    mkdir -p "${IMPL_OPENSOURCE_DIR}/${_lib_component}"
+    cp -rLf "${_src_lib}" "${IMPL_OPENSOURCE_DIR}/${_lib_component}/"
+    echo "[INFO] Copying ${_lib_component} libs to: ${IMPL_OPENSOURCE_DIR}/${_lib_component}/lib/"
+  else
+    echo "[ERROR] Directory not found: ${_src_lib}"
+    exit 1
+  fi
+done
+
+export MULTIMODAL_SDK_WHEEL_VERSION=$VERSION
+
+# build whl
+cd "${A_ROOT_DIR}"
+echo "[INFO] Executing python3 setup.py bdist_wheel..."
+python3 setup.py bdist_wheel
+
+echo "[INFO] Building done!"
+
+OUTPUT_DIR="${A_ROOT_DIR}/output"
+mkdir -p "${OUTPUT_DIR}"
+mkdir -p "${OUTPUT_DIR}/lib"
+mkdir -p "${OUTPUT_DIR}/script"
+mkdir -p "${OUTPUT_DIR}/opensource/FFmpeg"
+mkdir -p "${OUTPUT_DIR}/opensource/libjpeg-turbo"
+mkdir -p "${OUTPUT_DIR}/opensource/soxr"
+
+if compgen -G "${A_ROOT_DIR}/dist/*.whl" > /dev/null; then
+  cp -v "${A_ROOT_DIR}/dist/"*.whl "${OUTPUT_DIR}/"
+else
+  echo "[Warning] No whl file found in ${A_ROOT_DIR}/dist"
+fi
+
+if compgen -G "${B_REPO_DIR}/output/lib/libcore.so" > /dev/null; then
+  cp -v "${B_REPO_DIR}/output/lib/libcore.so" "${OUTPUT_DIR}/lib/"
+else
+  echo "[Warning] libcore.so not found!"
+fi
+
+cp -rf "${B_REPO_DIR}/output/opensource/FFmpeg/lib" "${OUTPUT_DIR}/opensource/FFmpeg"
+rm -rf "${OUTPUT_DIR}/opensource/FFmpeg/lib/pkgconfig"
+
+cp -rf "${B_REPO_DIR}/output/opensource/libjpeg-turbo/lib" "${OUTPUT_DIR}/opensource/libjpeg-turbo"
+rm -rf "${OUTPUT_DIR}/opensource/libjpeg-turbo/lib/cmake"
+rm -rf "${OUTPUT_DIR}/opensource/libjpeg-turbo/lib/pkgconfig"
+
+cp -rf "${B_REPO_DIR}/output/opensource/soxr/lib" "${OUTPUT_DIR}/opensource/soxr"
+rm -rf "${OUTPUT_DIR}/opensource/soxr/lib/pkgconfig"
+
+cp "${A_ROOT_DIR}/script/set_env.sh" "${OUTPUT_DIR}/script/"
+cp "${A_ROOT_DIR}/script/uninstall.sh" "${OUTPUT_DIR}/script/"
+VERSION_MAJOR=$(echo "$VERSION" | sed -E 's/\.b[0-9]+$//')
+echo -e "MindX SDK multimodal-sdk:${VERSION_MAJOR}\nmultimodal-sdk version:${VERSION}\nPlat: linux aarch64" > "${OUTPUT_DIR}/version.info"
+TAR_NAME="multimodal-sdk-${VERSION_TAR}_linux-aarch64.tar.gz"
+echo "[INFO] Packaging output to ${TAR_NAME}..."
+tar -czvf "${OUTPUT_DIR}/${TAR_NAME}" --exclude="${TAR_NAME}" -C "${OUTPUT_DIR}" $(ls -A "${OUTPUT_DIR}")
+cp "${A_ROOT_DIR}/script/help.info" "${OUTPUT_DIR}/script/"
+cp "${A_ROOT_DIR}/script/install.sh" "${OUTPUT_DIR}/script/"
+chmod +x "${OUTPUT_DIR}/script/install.sh"
+if [[ "${BUILD_ARGS[*]}" == *"test"* ]]; then
+    echo "[INFO] Building test: install whl first..."
+    # torchvision is only used by UTs as a reference implementation for tensor conversion and normalization.
+    # Keep it aligned with torch-npu 2.10.0.post4.
+    pip3 install torchvision==0.25.0 coverage pytest pytest-cov pytest-html
+    WHL_FILE=$(find "${A_ROOT_DIR}/dist" -name "*.whl" | head -n 1)
+    if [ -z "$WHL_FILE" ]; then
+        echo "[ERROR] whl package not found!"
+        exit 1
+    fi
+    # extract file name
+    WHL_NAME=$(basename "$WHL_FILE")
+    PKG_NAME=${WHL_NAME%%-*}
+    echo "[INFO] Uninstall WHL package: $PKG_NAME"
+    pip uninstall -y "$PKG_NAME" 2>/dev/null || echo "[INFO] WHL not installed, skipping uninstall"
+    echo "[INFO] Executing pytest with coverage report..."
+
+    cd "${A_ROOT_DIR}"
+    export LD_LIBRARY_PATH="${A_ROOT_DIR}/output/lib:${OUTPUT_DIR}/opensource/libjpeg-turbo/lib:$LD_LIBRARY_PATH"
+    export LD_LIBRARY_PATH="${OUTPUT_DIR}/opensource/FFmpeg/lib:$LD_LIBRARY_PATH"
+    export LD_LIBRARY_PATH="${OUTPUT_DIR}/opensource/soxr/lib:$LD_LIBRARY_PATH"
+    # clean coverage first
+    coverage erase
+    PYTHONPATH=source \
+    pytest \
+    --cov=source/mm \
+    --cov-report=html:build_script/coverage/html \
+    --cov-report=xml:build_script/coverage/coverage.xml \
+    --junit-xml=build_script/coverage/final.xml \
+    --html=build_script/coverage/final.html \
+    --self-contained-html \
+    --cov-branch \
+    --cov-report=term \
+    -vs test/
+
+    echo "[INFO] Coverage report generated:"
+    echo "  HTML: ${A_ROOT_DIR}/build_script/coverage/htmlcov/index.html"
+    echo "  XML : ${A_ROOT_DIR}/build_script/coverage/coverage.xml"
+    echo "  JUnit: ${A_ROOT_DIR}/build_script/coverage/final.xml"
+    echo "  HTML test report: ${A_ROOT_DIR}/build_script/coverage/final.html"
+
+    echo "[INFO] Test done!"
+fi
